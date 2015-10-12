@@ -5748,26 +5748,29 @@ int main_migrate(int argc, char **argv)
 		//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
 		
 		rune = host;
-		char verbose_buf[minmsglevel_default+3];
-        int verbose_len;
-        verbose_buf[0] = ' ';
-        verbose_buf[1] = '-';
-        memset(verbose_buf+2, 'v', minmsglevel_default);
-        verbose_buf[sizeof(verbose_buf)-1] = 0;
+		/* Currently I donnot think ssh cmd is necessary but simply pass #rune# will cause error
+		 * which has to be corrected somehow. [ck]
+		 */
+		//char verbose_buf[minmsglevel_default+3];
+        //int verbose_len;
+        //verbose_buf[0] = ' ';
+        //verbose_buf[1] = '-';
+        //memset(verbose_buf+2, 'v', minmsglevel_default);
+        //verbose_buf[sizeof(verbose_buf)-1] = 0;
 		
-        if (minmsglevel == minmsglevel_default) {
-            verbose_len = 0;
-        } else {
-            verbose_len = (minmsglevel_default - minmsglevel) + 2;
-        }
+        //if (minmsglevel == minmsglevel_default) {
+        //    verbose_len = 0;
+        //} else {
+        //    verbose_len = (minmsglevel_default - minmsglevel) + 2;
+        //}
 		
-        if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
-                     ssh_command, host,
-                     pass_tty_arg ? " -t" : "",
-                     verbose_len, verbose_buf,
-                     daemonize ? "" : " -e",
-                     debug ? " -d" : "") < 0)
-            return 1;
+        //if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
+        //             ssh_command, host,
+        //             pass_tty_arg ? " -t" : "",
+        //             verbose_len, verbose_buf,
+        //             daemonize ? "" : " -e",
+        //             debug ? " -d" : "") < 0)
+        //    return 1;
 		
 		migrate_domain_numa(domid, rune, debug, config_filename);
 		//return 0;
