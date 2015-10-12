@@ -5750,6 +5750,7 @@ int main_migrate(int argc, char **argv)
 		rune = host;
 		/* Currently I donnot think ssh cmd is necessary but simply pass #rune# will cause error
 		 * which has to be corrected somehow. [ck]
+		 * Issue: execlp("sh","sh","-c",rune,(char*)0) in create_migration_child() failed!!
 		 */
 		//char verbose_buf[minmsglevel_default+3];
         //int verbose_len;
