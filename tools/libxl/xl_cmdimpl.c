@@ -2148,9 +2148,9 @@ static void parse_config_data_numa(const char *config_source,
 	fprintf(stderr, "[ck] Begin replacing cpus...\n");
 	//node_str[0] = (char)('0' + node_index);
 	strcat(numa_cpu_str, node_index);
-	buf = numa_cpu_str;
-	//char **cap_str = NULL;
-	//cap_str = &buf;
+	//buf = numa_cpu_str;
+	char *cap_str = NULL;
+	cap_str = numa_cpu_str;
 	xlu_cfg_replace_string (config, "cpus", &cap_str, 0);
 	fprintf(stderr, "[ck] End replacing cpus...\n");
 	/* end
@@ -5239,6 +5239,7 @@ static void migrate_domain_numa(uint32_t domid, const char *rune, int debug,
 	//numa_index = (int)(rune[0] - '0');
 	fprintf(stderr, "[ck] Target node index is retrived from rune, the node index is %s\n", 
 			numa_index);
+	fprintf(stderr, "[ck] The complete rune is %s\n", rune);
     save_numa_domain_core_begin(domid, override_config_file,
                            &config_data, &config_len, numa_index);
 	// end [ck]
