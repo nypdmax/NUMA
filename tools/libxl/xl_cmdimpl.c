@@ -2148,7 +2148,7 @@ static void parse_config_data_numa(const char *config_source,
 	fprintf(stderr, "[ck] Begin replacing cpus...\n");
 	//node_str[0] = (char)('0' + node_index);
 	strcat(numa_cpu_str, node_index);
-	buf = numa_cpu_str;
+	cap_str = numa_cpu_str;
 	//char **cap_str = NULL;
 	//cap_str = &buf;
 	xlu_cfg_replace_string (config, "cpus", &cap_str, 0);
@@ -5704,7 +5704,7 @@ int main_migrate(int argc, char **argv)
 	/* Added by ck. [ck] */
 	case 'n':
 		// This is for numa migration. [ck]
-		daemonize = 0;
+		//daemonize = 0;// daemonize is not needed.
 		numa_mig = 1;
 		break;
 	case 0x100:
