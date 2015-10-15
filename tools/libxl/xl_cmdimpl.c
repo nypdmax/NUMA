@@ -2036,6 +2036,7 @@ static void parse_config_data_numa(const char *config_source,
 							  char *node_index)
 {
     const char *buf;
+	char *cap_str = NULL; // Used to pass cpu settings. [ck]
 	char numa_cpu_str[8] = "nodes:"; // for cpu setup [ck], node index betwenn 0 and 9 only
 	//char node_str[1] = {'0'}; //[ck]
     long l;
@@ -2148,8 +2149,7 @@ static void parse_config_data_numa(const char *config_source,
 	fprintf(stderr, "[ck] Begin replacing cpus...\n");
 	//node_str[0] = (char)('0' + node_index);
 	strcat(numa_cpu_str, node_index);
-	//buf = numa_cpu_str;
-	char *cap_str = NULL;
+	//buf = numa_cpu_str;	
 	cap_str = numa_cpu_str;
 	//char **cap_str = NULL;
 	//cap_str = &buf;
@@ -5654,11 +5654,11 @@ int main_migrate(int argc, char **argv)
     const char *ssh_command = "ssh";
     char *rune = NULL;
     char *host;
-	// Argv in cmd which indicates the target numa node. 
-	// Assumed to be only a number string[ck]
+	// numa_index is an argv in cmd which indicates the target numa node. 
+	// Assumed to be only a number string. [ck]
 	char *numa_index; 
     int opt, daemonize = 1, monitor = 1, debug = 0;
-	int numa_mig = 0;// 1 if a numa migration is going to be performed.
+	int numa_mig = 0;// 1 if a numa migration is going to be performed. [ck]
     static struct option opts[] = {
         {"debug", 0, 0, 0x100},
         COMMON_LONG_OPTS,
@@ -5716,80 +5716,51 @@ int main_migrate(int argc, char **argv)
     }
 	// common migration [ck]
 	bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
+	domid = find_domain(argv[optind]);
 	
 	if(!numa_mig) {
-		domid = find_domain(argv[optind]);
 		host = argv[optind + 1];
-
-		//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
-
-		if (!ssh_command[0]) {
-			rune= host;
-		} else {
-			char verbose_buf[minmsglevel_default+3];
-			int verbose_len;
-			verbose_buf[0] = ' ';
-			verbose_buf[1] = '-';
-			memset(verbose_buf+2, 'v', minmsglevel_default);
-			verbose_buf[sizeof(verbose_buf)-1] = 0;
-			if (minmsglevel == minmsglevel_default) {
-				verbose_len = 0;
-			} else {
-				verbose_len = (minmsglevel_default - minmsglevel) + 2;
-			}
-			if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
-						 ssh_command, host,
-						 pass_tty_arg ? " -t" : "",
-						 verbose_len, verbose_buf,
-						 daemonize ? "" : " -e",
-						 debug ? " -d" : "") < 0)
-				return 1;
-		}
-		
-		/*migrate_domain has to be changed to support on-host numa migration. [ck]*/
-		migrate_domain(domid, rune, debug, config_filename);
-		//return 0;
 	}
-	// Numa migration. Added by ck.[ck]
-	// Only change #rune# to the numa node index is not correct.
-	// Thus numa node Index should be passed alone here.
-	else {
-		// Here host is node_id of numa nodes.
-		domid = find_domain(argv[optind]);
+	else{
 		numa_index = argv[optind + 1]; // This should be a number between 0 and 9. [ck]
 		host = "localhost"; // When migrating to a numa node then it should be on local host. [ck]
-		
-		//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
-		
-		rune = host;
-		/* Currently I donnot think ssh cmd is necessary but simply pass #rune# will cause error
-		 * which has to be corrected somehow. [ck]
-		 * Issue: execlp("sh","sh","-c",rune,(char*)0) in create_migration_child() failed!!
-		 */
-		//char verbose_buf[minmsglevel_default+3];
-        //int verbose_len;
-        //verbose_buf[0] = ' ';
-        //verbose_buf[1] = '-';
-        //memset(verbose_buf+2, 'v', minmsglevel_default);
-        //verbose_buf[sizeof(verbose_buf)-1] = 0;
-		
-        //if (minmsglevel == minmsglevel_default) {
-        //    verbose_len = 0;
-        //} else {
-        //    verbose_len = (minmsglevel_default - minmsglevel) + 2;
-        //}
-		
-        //if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
-        //             ssh_command, host,
-        //             pass_tty_arg ? " -t" : "",
-        //             verbose_len, verbose_buf,
-        //             daemonize ? "" : " -e",
-        //             debug ? " -d" : "") < 0)
-        //    return 1;
-		
-		migrate_domain_numa(domid, rune, debug, config_filename, numa_index);
-		//return 0;
 	}
+
+	//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
+
+	if (!ssh_command[0]) {
+		fprintf(stderr, "[ck] main_migrate(), in the if (!ssh_command[0])");
+		rune= host;
+	} else {
+		char verbose_buf[minmsglevel_default+3];
+		int verbose_len;
+		verbose_buf[0] = ' ';
+		verbose_buf[1] = '-';
+		memset(verbose_buf+2, 'v', minmsglevel_default);
+		verbose_buf[sizeof(verbose_buf)-1] = 0;
+		if (minmsglevel == minmsglevel_default) {
+			verbose_len = 0;
+		} else {
+			verbose_len = (minmsglevel_default - minmsglevel) + 2;
+		}
+		if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
+					 ssh_command, host,
+					 pass_tty_arg ? " -t" : "",
+					 verbose_len, verbose_buf,
+					 daemonize ? "" : " -e",
+					 debug ? " -d" : "") < 0)
+			fprintf(stderr, "[ck] asprintf rune is %s", rune);
+			return 1;
+	}
+	
+	/*migrate_domain has to be changed to support on-host numa migration. [ck]*/
+	if(!numa_mig){
+		migrate_domain(domid, rune, debug, config_filename);
+	}
+	else{
+		migrate_domain_numa(domid, rune, debug, config_filename, numa_index);
+	}
+	//return 0;
 	
 	return 0;
 }
