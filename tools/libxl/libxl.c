@@ -6604,6 +6604,8 @@ void libxl_mac_copy(libxl_ctx *ctx, libxl_mac *dst, libxl_mac *src)
         (*dst)[i] = (*src)[i];
 }
 
+/* This is bad. Currently I don't know how to change vcpus' settings. [ck]
+ */
 int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
                                         libxl_domain_config *d_config)
 {

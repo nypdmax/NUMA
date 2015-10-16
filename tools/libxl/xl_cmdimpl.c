@@ -5722,7 +5722,7 @@ int main_migrate(int argc, char **argv)
 		host = argv[optind + 1];
 	}
 	else{
-		numa_index = argv[optind + 1]; // This should be a number between 0 and 9. [ck]
+		numa_index = argv[optind + 1]; // This should be an interger. [ck]
 		host = "localhost"; // When migrating to a numa node then it should be on local host. [ck]
 	}
 
