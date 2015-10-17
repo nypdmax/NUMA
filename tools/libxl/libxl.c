@@ -6604,8 +6604,6 @@ void libxl_mac_copy(libxl_ctx *ctx, libxl_mac *dst, libxl_mac *src)
         (*dst)[i] = (*src)[i];
 }
 
-/* This is bad. Currently I don't know how to change vcpus' settings. [ck]
- */
 int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
                                         libxl_domain_config *d_config)
 {
@@ -6653,7 +6651,7 @@ int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
         libxl_uuid_copy(ctx, &d_config->c_info.uuid, &info.uuid);
         libxl_dominfo_dispose(&info);
     }
-
+	
     /* Memory limits:
      *
      * Currently there are three memory limits:
@@ -6793,6 +6791,252 @@ out:
     return rc;
 }
 
+/* Retrieve domains' configurations. [ck]
+ * And change their numa configs for numa migrations 
+ */
+int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
+                                        libxl_domain_config *d_config)
+{
+    GC_INIT(ctx);
+    int rc;
+    libxl__domain_userdata_lock *lock = NULL;
+
+    CTX_LOCK;
+
+    lock = libxl__lock_domain_userdata(gc, domid);
+    if (!lock) {
+        rc = ERROR_LOCK_FAIL;
+        goto out;
+    }
+
+    rc = libxl__get_domain_configuration(gc, domid, d_config);
+    if (rc) {
+        LOG(ERROR, "fail to get domain configuration for domain %d", domid);
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+    /* Domain name */
+    {
+        char *domname;
+        domname = libxl_domid_to_name(ctx, domid);
+        if (!domname) {
+            LOG(ERROR, "fail to get domain name for domain %d", domid);
+            goto out;
+        }
+        free(d_config->c_info.name);
+        d_config->c_info.name = domname; /* steals allocation */
+    }
+
+    /* Domain UUID */
+    {
+        libxl_dominfo info;
+        libxl_dominfo_init(&info);
+        rc = libxl_domain_info(ctx, &info, domid);
+        if (rc) {
+            LOG(ERROR, "fail to get domain info for domain %d", domid);
+            libxl_dominfo_dispose(&info);
+            goto out;
+        }
+        libxl_uuid_copy(ctx, &d_config->c_info.uuid, &info.uuid);
+        libxl_dominfo_dispose(&info);
+    }
+	
+	/* VCPU affanities:
+	 * [ck]
+	 * In order to perform a NUMA migration, the target VM's cpu setup has to be adjusted.
+	 * Currently the adjustment process includes:
+	 * 1. locate cpu bitmap according to the target NUMA node
+	 * 2. change VM's d_config.b_info.vcpu_hard_affinity
+	 * NOTE: libxl_set_vcpuaffinity in 537x 
+	 * and libxl__get_numa_candidate in libxl_numa.c could provide some hints
+	 * libxl_set_vcpuaffinity and libxl_set_vcpuaffinity_all
+	 */
+	{
+		/* VM's vcpu_hard_affinity is not stored in XenStore currently so 
+		 * we have to manually change d_config
+		 * [ck]
+		 */
+		// look up numa node cpu bitmap
+		// d_config.b_info.vcpu_hard_affinity = 
+		libxl_cputopology *tinfo = NULL;
+		libxl_numainfo *ninfo = NULL;
+		libxl_bitmap cpu_map, node_map;
+		int i = 0, nr_cpus = 0, suitable_cpus = 0;
+		char *buf = NULL;
+		
+		// initial data structure
+		libxl_bitmap_init(&cpu_map);
+		//libxl_bitmap_init(&node_map);
+		
+		///* Get platform info and prepare the map for testing the combinations */
+		//if(!(ninfo = libxl_get_numainfo(CTX, &nr_nodes)))
+		//	return ERROR_FAIL;
+		////if (ninfo == NULL)
+		////	return ERROR_FAIL;
+		///* At least there's one node */
+		//GCNEW_ARRAY(vcpus_on_node, nr_nodes);
+		tinfo = libxl_get_cpu_topology(CTX, &nr_cpus);
+		// tinfo is an array which can be processed by using an iteration
+		if (tinfo == NULL){
+			rc = ERROR_FAIL;
+			LOG(WARN, "[ck] Retrieving CPU topology failed.\n");
+			fprintf(stderr, "[ck] Retrieving CPU topology failed.\n");
+			goto out;
+		}
+		
+		for (i = 0 ; i < nr_cpus; i++){
+			// Here I'm going to manually construct the vcpu_hard_affinity string,
+			// currently I have no better options.
+			if(tinfo[i].node == target_node){
+				suitable_cpus++;
+				if(suitable_cpus > 1){
+					strcat(buf, ',');
+				}
+				strcat(buf, (char)(i+'0'));
+			}
+		}
+	}
+
+    /* Memory limits:
+     *
+     * Currently there are three memory limits:
+     *  1. "target" in xenstore (originally memory= in config file)
+     *  2. "static-max" in xenstore (originally maxmem= in config file)
+     *  3. "max_memkb" in hypervisor
+     *
+     * The third one is not visible and currently managed by
+     * toolstack. In order to rebuild a domain we only need to have
+     * "target" and "static-max".
+     */
+    {
+        uint32_t target_memkb = 0, max_memkb = 0;
+
+        /* "target" */
+        rc = libxl__get_memory_target(gc, domid, &target_memkb, &max_memkb);
+        if (rc) {
+            LOG(ERROR, "fail to get memory target for domain %d", domid);
+            goto out;
+        }
+        /* Target memory in xenstore is different from what user has
+         * asked for. The difference is video_memkb. See
+         * libxl_set_memory_target.
+         */
+        d_config->b_info.target_memkb = target_memkb +
+            d_config->b_info.video_memkb;
+
+        d_config->b_info.max_memkb = max_memkb;
+    }
+
+    /* Devices: disk, nic, vtpm, pcidev etc. */
+
+    /* The MERGE macro implements following logic:
+     * 0. retrieve JSON (done by now)
+     * 1. retrieve list of device from xenstore
+     * 2. use xenstore entries as primary reference and compare JSON
+     *    entries with them.
+     *    a. if a device is present in xenstore and in JSON, merge the
+     *       two views.
+     *    b. if a device is not present in xenstore but in JSON, delete
+     *       it from the result.
+     *    c. it's impossible to have an entry present in xenstore but
+     *       not in JSON, because we maintain an invariant that every
+     *       entry in xenstore must have a corresponding entry in JSON.
+     * 3. "merge" operates on "src" and "dst". "src" points to the
+     *    entry retrieved from xenstore while "dst" points to the entry
+     *    retrieve from JSON.
+     */
+#define MERGE(type, ptr, compare, merge)                                \
+    do {                                                                \
+        libxl_device_##type *p = NULL;                                  \
+        int i, j, num;                                                  \
+                                                                        \
+        p = libxl_device_##type##_list(CTX, domid, &num);               \
+        if (p == NULL) {                                                \
+            LOG(DEBUG,                                                  \
+                "no %s from xenstore for domain %d",                    \
+                #type, domid);                                          \
+        }                                                               \
+                                                                        \
+        for (i = 0; i < d_config->num_##ptr; i++) {                     \
+            libxl_device_##type *q = &d_config->ptr[i];                 \
+            for (j = 0; j < num; j++) {                                 \
+                if (compare(&p[j], q))                                  \
+                    break;                                              \
+            }                                                           \
+                                                                        \
+            if (j < num) {         /* found in xenstore */              \
+                libxl_device_##type *dst, *src;                         \
+                dst = q;                                                \
+                src = &p[j];                                            \
+                merge;                                                  \
+            } else {                /* not found in xenstore */         \
+                LOG(WARN,                                               \
+                "Device present in JSON but not in xenstore, ignored"); \
+                                                                        \
+                libxl_device_##type##_dispose(q);                       \
+                                                                        \
+                for (j = i; j < d_config->num_##ptr - 1; j++)           \
+                    memcpy(&d_config->ptr[j], &d_config->ptr[j+1],      \
+                           sizeof(libxl_device_##type));                \
+                                                                        \
+                d_config->ptr =                                         \
+                    libxl__realloc(NOGC, d_config->ptr,                 \
+                                   sizeof(libxl_device_##type) *        \
+                                   (d_config->num_##ptr - 1));          \
+                                                                        \
+                /* rewind counters */                                   \
+                d_config->num_##ptr--;                                  \
+                i--;                                                    \
+            }                                                           \
+        }                                                               \
+                                                                        \
+        for (i = 0; i < num; i++)                                       \
+            libxl_device_##type##_dispose(&p[i]);                       \
+        free(p);                                                        \
+    } while (0);
+
+    MERGE(nic, nics, COMPARE_DEVID, {});
+
+    MERGE(vtpm, vtpms, COMPARE_DEVID, {});
+
+    MERGE(pci, pcidevs, COMPARE_PCI, {});
+
+    /* Take care of removable device. We maintain invariant in the
+     * insert / remove operation so that:
+     * 1. if xenstore is "empty" while JSON is not, the result
+     *    is "empty"
+     * 2. if xenstore has a different media than JSON, use the
+     *    one in JSON
+     * 3. if xenstore and JSON have the same media, well, you
+     *    know the answer :-)
+     *
+     * Currently there is only one removable device -- CDROM.
+     * Look for libxl_cdrom_insert for reference.
+     */
+    MERGE(disk, disks, COMPARE_DISK, {
+            if (src->removable) {
+                if (!src->pdev_path || *src->pdev_path == '\0') {
+                    /* 1, no media in drive */
+                    free(dst->pdev_path);
+                    dst->pdev_path = libxl__strdup(NOGC, "");
+                    dst->format = LIBXL_DISK_FORMAT_EMPTY;
+                } else {
+                    /* 2 and 3, use JSON, no need to touch anything */
+                    ;
+                }
+            }
+        });
+
+#undef MERGE
+
+out:
+    if (lock) libxl__unlock_domain_userdata(lock);
+	libxl_cputopology_list_free(tinfo, nr_cpus);// Added by ck. [ck]
+    CTX_UNLOCK;
+    GC_FREE;
+    return rc;
+}
 /*
  * Local variables:
  * mode: C

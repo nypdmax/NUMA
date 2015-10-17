@@ -1018,20 +1018,9 @@ static void parse_config_data(const char *config_source,
     if (!xlu_cfg_get_long (config, "maxvcpus", &l, 0))
         b_info->max_vcpus = l;
 	
-	/* If I want a domain to be on a specific node,
-	 * then its cpus' setup should be like cpus="CPU-LIST",
-	 * e.g. cpus = "nodes:x" where x is the node's index.
-	 * [ck]
-	 */
-	//numa_str = "node:";
-	//i = "0" + node_index;
-	//strcat
-	//strcpy(buf, "nodes:x", sizeof("nodes:X"));
-	//xlu_cfg_replace_string (config, "cpus", #nodes:x#, 0)
     buf = NULL;
     if (!xlu_cfg_get_list (config, "cpus", &cpus, &num_cpus, 1) ||
 			!xlu_cfg_get_string (config, "cpus", &buf, 0)){
-		// strcpy(
         parse_vcpu_affinity(b_info, cpus, buf, num_cpus, /* is_hard */ true);
 	}
 
