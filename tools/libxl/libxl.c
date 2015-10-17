@@ -6795,7 +6795,7 @@ out:
  * And change their numa configs for numa migrations 
  */
 int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
-                                        libxl_domain_config *d_config)
+                                        libxl_domain_config *d_config, char *numa_index)
 {
     GC_INIT(ctx);
     int rc;
@@ -6862,7 +6862,7 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 		libxl_cputopology *tinfo = NULL;
 		libxl_numainfo *ninfo = NULL;
 		libxl_bitmap cpu_map, node_map;
-		int i = 0, nr_cpus = 0, suitable_cpus = 0;
+		int i = 0, nr_cpus = 0, suitable_cpus = 0, target_node = 0;
 		char *buf = NULL;
 		
 		// initial data structure
@@ -6885,17 +6885,31 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 			goto out;
 		}
 		
-		for (i = 0 ; i < nr_cpus; i++){
-			// Here I'm going to manually construct the vcpu_hard_affinity string,
-			// currently I have no better options.
-			if(tinfo[i].node == target_node){
-				suitable_cpus++;
-				if(suitable_cpus > 1){
-					strcat(buf, ',');
-				}
-				strcat(buf, (char)(i+'0'));
-			}
+		//for (i = 0 ; i < nr_cpus; i++){
+		//	// Here I'm going to manually construct the vcpu_hard_affinity string,
+		//	// currently I have no better options.
+		//	if(tinfo[i].node == target_node){
+		//		suitable_cpus++;
+		//		if(suitable_cpus > 1){
+		//			strcat(buf, ',');
+		//		}
+		//		strcat(buf, (char)(i+'0'));
+			//}
+		target_node = atoi(numa_index);
+		if(target_node < 0 || target_node > nr_cpus){
+			fprintf(stderr, "[ck] target_node is either too small(< 1) or to big (> %d)\n, \
+					make it to 0", nr_cpus);
+			target_node = 0;
 		}
+		
+		rc = libxl_node_to_cpumap(ctx, target_node, &cpu_map);
+		if (rc) {
+			fprintf(stderr, "[ck] libxl_node_to_cpumap failed.\n");
+			goto out;
+		}
+		
+		if (libxl_set_vcpuaffinity_all(ctx, domid, nr_cpus, cpu_map, NULL))
+            fprintf(stderr, "Could not set affinity.\n");
 	}
 
     /* Memory limits:
@@ -7033,7 +7047,8 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 out:
     if (lock) libxl__unlock_domain_userdata(lock);
 	libxl_cputopology_list_free(tinfo, nr_cpus);// Added by ck. [ck]
-    CTX_UNLOCK;
+    libxl_bitmap_dispose(&cpu_map);// Added by ck. [ck]
+	CTX_UNLOCK;
     GC_FREE;
     return rc;
 }

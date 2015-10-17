@@ -4814,14 +4814,17 @@ static void save_numa_domain_core_begin(uint32_t domid,
 		fprintf(stderr, "[ck] End passing numa node index to parse_config_data_numa.\n");
         free(config_v);
     } else {
-        rc = libxl_retrieve_domain_configuration(ctx, domid, &d_config);
+        //rc = libxl_retrieve_domain_configuration(ctx, domid, &d_config);
+		rc = libxl_retrieve_domain_config_numa(ctx, domid, &d_config, numa_index);
         if (rc) {
-            fprintf(stderr, "unable to retrieve domain configuration\n");
+            //fprintf(stderr, "unable to retrieve domain configuration\n");
+			fprintf(stderr, "[ck] unable to retrieve domain configuration\n");
             exit(2);
         }
     }
 
     config_c = libxl_domain_config_to_json(ctx, &d_config);
+	fprintf(stderr, "[ck] final configuration is %s\n", config_c);
     if (!config_c) {
         fprintf(stderr, "unable to convert config file to JSON\n");
         exit(2);
