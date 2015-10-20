@@ -6852,65 +6852,81 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 	 * and libxl__get_numa_candidate in libxl_numa.c could provide some hints
 	 * libxl_set_vcpuaffinity and libxl_set_vcpuaffinity_all
 	 */
-	{
-		/* VM's vcpu_hard_affinity is not stored in XenStore currently so 
-		 * we have to manually change d_config
-		 * [ck]
-		 */
-		// look up numa node cpu bitmap
-		// d_config.b_info.vcpu_hard_affinity = 
-		libxl_cputopology *tinfo = NULL;
-		libxl_numainfo *ninfo = NULL;
-		libxl_bitmap cpu_map, node_map;
-		int i = 0, nr_cpus = 0, suitable_cpus = 0, target_node = 0;
-		char *buf = NULL;
-		
-		// initial data structure
-		libxl_bitmap_init(&cpu_map);
-		//libxl_bitmap_init(&node_map);
-		
-		///* Get platform info and prepare the map for testing the combinations */
-		//if(!(ninfo = libxl_get_numainfo(CTX, &nr_nodes)))
-		//	return ERROR_FAIL;
-		////if (ninfo == NULL)
-		////	return ERROR_FAIL;
-		///* At least there's one node */
-		//GCNEW_ARRAY(vcpus_on_node, nr_nodes);
-		tinfo = libxl_get_cpu_topology(CTX, &nr_cpus);
-		// tinfo is an array which can be processed by using an iteration
-		if (tinfo == NULL){
-			rc = ERROR_FAIL;
-			LOG(WARN, "[ck] Retrieving CPU topology failed.\n");
-			fprintf(stderr, "[ck] Retrieving CPU topology failed.\n");
-			goto out;
-		}
-		
-		//for (i = 0 ; i < nr_cpus; i++){
-		//	// Here I'm going to manually construct the vcpu_hard_affinity string,
-		//	// currently I have no better options.
-		//	if(tinfo[i].node == target_node){
-		//		suitable_cpus++;
-		//		if(suitable_cpus > 1){
-		//			strcat(buf, ',');
-		//		}
-		//		strcat(buf, (char)(i+'0'));
-			//}
-		target_node = atoi(numa_index);
-		if(target_node < 0 || target_node > nr_cpus){
-			fprintf(stderr, "[ck] target_node is either too small(< 1) or to big (> %d)\n, \
-					make it to 0", nr_cpus);
-			target_node = 0;
-		}
-		
-		rc = libxl_node_to_cpumap(ctx, target_node, &cpu_map);
-		if (rc) {
-			fprintf(stderr, "[ck] libxl_node_to_cpumap failed.\n");
-			goto out;
-		}
-		
-		if (libxl_set_vcpuaffinity_all(ctx, domid, nr_cpus, cpu_map, NULL))
-            fprintf(stderr, "Could not set affinity.\n");
+	/* VM's vcpu_hard_affinity is not stored in XenStore currently so 
+	* we have to manually change d_config
+	* [ck]
+	*/
+	libxl_cputopology *tinfo = NULL;
+	libxl_numainfo *ninfo = NULL;
+	libxl_bitmap cpu_map;//, node_map;
+	int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
+	//int i = 0, suitable_cpus = 0;
+	int *vcpus_on_node;
+	//char *buf = NULL;
+	
+	// initialize data structure
+	libxl_bitmap_init(&cpu_map);
+	//libxl_bitmap_init(&node_map);
+	
+	/* "tinfo" is an array which can be, e.g., processed by using an iteration. */
+	//libxl_cputopology_init(tinfo);
+	tinfo = libxl_get_cpu_topology(CTX, &nr_cpus);		
+	if (tinfo == NULL){
+		rc = ERROR_FAIL;
+		LOG(WARN, "[ck] Retrieving CPU topology failed.\n");
+		fprintf(stderr, "[ck] Retrieving CPU topology failed.\n");
+		goto out;
 	}
+	
+	/* Get platform info and prepare the map for testing the combinations */
+	//libxl_numainfo_init(ninfo);
+	ninfo = libxl_get_numainfo(CTX, &nr_nodes);
+	if(ninfo == NULL){
+		rc = ERROR_FAIL;
+		LOG(WARN, "[ck] Retrieving NUMA info failed.\n");
+		fprintf(stderr, "[ck] Retrieving NUMA info failed.\n");
+		goto out;
+	}
+
+	GCNEW_ARRAY(vcpus_on_node, nr_nodes);
+	
+	//for (i = 0 ; i < nr_cpus; i++){
+	//	/* Here I'm going to manually construct the vcpu_hard_affinity string,
+	//   * like {0,1,2,3,4,5}
+	//	 * currently I have no better options.
+	//   */
+	//	if(tinfo[i].node == target_node){
+	//		suitable_cpus++;
+	//		if(suitable_cpus > 1){
+	//			strcat(buf, ',');
+	//		}
+	//		strcat(buf, (char)(i+'0'));
+	//}
+	/* get target_node from numa_index and assert its value */
+	target_node = atoi(numa_index);
+	if(target_node < 0 || target_node > nr_nodes){
+		fprintf(stderr, "[ck] target_node is either too small(< 1) or to big (> %d)\n, \
+				force it to 0, or there was a possible conversion error.\n", nr_cpus);
+		target_node = 0;
+	}
+	
+	/* Alloc cpu_map and prepare mapping between node and cpu topology */
+	rc = libxl_node_bitmap_alloc(CTX, &cpu_map, 0);
+    if (rc)
+        goto out;
+	
+	rc = libxl_node_to_cpumap(ctx, target_node, &cpu_map);
+	if (rc) {
+		fprintf(stderr, "[ck] libxl_node_to_cpumap failed.\n");
+		goto out;
+	}
+	
+	/* set up cpu affinity */
+	if (libxl_set_vcpuaffinity_all(ctx, domid, nr_cpus, &cpu_map, NULL)){
+		fprintf(stderr, "Could not set affinity.\n");
+		goto out;
+	}
+	/* End set up affinity. */
 
     /* Memory limits:
      *
@@ -7046,8 +7062,15 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 
 out:
     if (lock) libxl__unlock_domain_userdata(lock);
-	libxl_cputopology_list_free(tinfo, nr_cpus);// Added by ck. [ck]
-    libxl_bitmap_dispose(&cpu_map);// Added by ck. [ck]
+	/* Free data structures. 
+	 * Added by ck. [ck]
+	 * Start:
+	 */
+	libxl_cputopology_list_free(tinfo, nr_cpus);
+	libxl_numainfo_list_free(ninfo, nr_nodes);
+    libxl_bitmap_dispose(&cpu_map);
+	//libxl_bitmap_dispose(&node_map);
+	/* End */
 	CTX_UNLOCK;
     GC_FREE;
     return rc;
