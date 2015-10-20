@@ -6803,6 +6803,17 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 
     CTX_LOCK;
 
+	/* VM's vcpu_hard_affinity is not stored in XenStore currently so 
+	* we have to manually change d_config
+	* [ck]
+	*/
+	libxl_cputopology *tinfo = NULL;
+	libxl_numainfo *ninfo = NULL;
+	libxl_bitmap cpu_map;//, node_map;
+	int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
+	//int i = 0, suitable_cpus = 0;
+	int *vcpus_on_node;
+	
     lock = libxl__lock_domain_userdata(gc, domid);
     if (!lock) {
         rc = ERROR_LOCK_FAIL;
@@ -6856,13 +6867,12 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 	* we have to manually change d_config
 	* [ck]
 	*/
-	libxl_cputopology *tinfo = NULL;
-	libxl_numainfo *ninfo = NULL;
-	libxl_bitmap cpu_map;//, node_map;
-	int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
-	//int i = 0, suitable_cpus = 0;
-	int *vcpus_on_node;
-	//char *buf = NULL;
+	//libxl_cputopology *tinfo = NULL;
+	//libxl_numainfo *ninfo = NULL;
+	//libxl_bitmap cpu_map;//, node_map;
+	//int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
+	////int i = 0, suitable_cpus = 0;
+	//int *vcpus_on_node;
 	
 	// initialize data structure
 	libxl_bitmap_init(&cpu_map);
@@ -6896,7 +6906,7 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 	//	 * currently I have no better options.
 	//   */
 	//	if(tinfo[i].node == target_node){
-	//		suitable_cpus++;
+	//		suitable_cpus++;-
 	//		if(suitable_cpus > 1){
 	//			strcat(buf, ',');
 	//		}
@@ -6906,7 +6916,7 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 	target_node = atoi(numa_index);
 	if(target_node < 0 || target_node > nr_nodes){
 		fprintf(stderr, "[ck] target_node is either too small(< 1) or to big (> %d)\n, \
-				force it to 0, or there was a possible conversion error.\n", nr_cpus);
+				force it to 0, or there was a possible conversion error.\n", nr_nodes);
 		target_node = 0;
 	}
 	
