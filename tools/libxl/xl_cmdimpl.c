@@ -4815,7 +4815,9 @@ static void save_numa_domain_core_begin(uint32_t domid,
         free(config_v);
     } else {
         //rc = libxl_retrieve_domain_configuration(ctx, domid, &d_config);
+		fprintf(stderr, "[ck] Entering libxl_retrieve_domain_config_numa().\n");
 		rc = libxl_retrieve_domain_config_numa(ctx, domid, &d_config, numa_index);
+		fprintf(stderr, "[ck] Leave libxl_retrieve_domain_config_numa().\n");
         if (rc) {
             //fprintf(stderr, "unable to retrieve domain configuration\n");
 			fprintf(stderr, "[ck] unable to retrieve domain configuration\n");
@@ -5233,7 +5235,7 @@ static void migrate_domain_numa(uint32_t domid, const char *rune, int debug,
 	//numa_index = (int)(rune[0] - '0');
 	fprintf(stderr, "[ck] Target node index is retrived from rune, the node index is %s\n", 
 			numa_index);
-	fprintf(stderr, "[ck] The complete rune is %s\n", rune);
+	fprintf(stderr, "[ck] The complete rune is %s\n Entering save_numa_domain_core_begin()\n", rune);
     save_numa_domain_core_begin(domid, override_config_file,
                            &config_data, &config_len, numa_index);
 	// end [ck]
@@ -5648,7 +5650,7 @@ int main_migrate(int argc, char **argv)
     char *host;
 	// numa_index is an argv in cmd which indicates the target numa node. 
 	// Assumed to be only a number string. [ck]
-	char *numa_index; 
+	char *numa_index = NULL; 
     int opt, daemonize = 1, monitor = 1, debug = 0;
 	int numa_mig = 0;// 1 if a numa migration is going to be performed. [ck]
     static struct option opts[] = {
@@ -5710,12 +5712,16 @@ int main_migrate(int argc, char **argv)
 	bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
 	domid = find_domain(argv[optind]);
 	
-	if(!numa_mig) {
-		host = argv[optind + 1];
-	}
-	else{
+	fprintf(stderr, "[ck] numa_mig == %d in main_migrate()\n", numa_mig);
+	
+	if(numa_mig == 1) {		
 		numa_index = argv[optind + 1]; // This should be an interger. [ck]
 		host = "localhost"; // When migrating to a numa node then it should be on local host. [ck]
+		fprintf(stderr, "[ck] numa_index == %s, host == %s in main_migrate()\n", numa_index, host);
+	}
+	else { // normal migration 
+		host = argv[optind + 1];
+		fprintf(stderr, "[ck] host == %s in main_migrate()\n", host);
 	}
 
 	//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
@@ -5724,6 +5730,7 @@ int main_migrate(int argc, char **argv)
 		fprintf(stderr, "[ck] main_migrate(), in the if (!ssh_command[0])");
 		rune= host;
 	} else {
+		fprintf(stderr, "[ck] main_migrate(), in the else (!ssh_command[0])");
 		char verbose_buf[minmsglevel_default+3];
 		int verbose_len;
 		verbose_buf[0] = ' ';
@@ -5740,17 +5747,21 @@ int main_migrate(int argc, char **argv)
 					 pass_tty_arg ? " -t" : "",
 					 verbose_len, verbose_buf,
 					 daemonize ? "" : " -e",
-					 debug ? " -d" : "") < 0)
+					 debug ? " -d" : "") < 0){
 			fprintf(stderr, "[ck] asprintf rune is %s", rune);
 			return 1;
+		}
+		fprintf(stderr, "[ck] main_migrate(), leave the else (!ssh_command[0])");
 	}
 	
 	/*migrate_domain has to be changed to support on-host numa migration. [ck]*/
-	if(!numa_mig){
-		migrate_domain(domid, rune, debug, config_filename);
-	}
-	else{
+	if(numa_mig == 1){
+		fprintf(stderr, "[ck] entering migrate_domain_numa()...\n");
 		migrate_domain_numa(domid, rune, debug, config_filename, numa_index);
+		fprintf(stderr, "[ck] leave migrate_domain_numa()\n");
+	}
+	else {
+		migrate_domain(domid, rune, debug, config_filename);
 	}
 	//return 0;
 	
