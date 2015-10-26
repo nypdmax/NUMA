@@ -1018,20 +1018,9 @@ static void parse_config_data(const char *config_source,
     if (!xlu_cfg_get_long (config, "maxvcpus", &l, 0))
         b_info->max_vcpus = l;
 	
-	/* If I want a domain to be on a specific node,
-	 * then its cpus' setup should be like cpus="CPU-LIST",
-	 * e.g. cpus = "nodes:x" where x is the node's index.
-	 * [ck]
-	 */
-	//numa_str = "node:";
-	//i = "0" + node_index;
-	//strcat
-	//strcpy(buf, "nodes:x", sizeof("nodes:X"));
-	//xlu_cfg_replace_string (config, "cpus", #nodes:x#, 0)
     buf = NULL;
     if (!xlu_cfg_get_list (config, "cpus", &cpus, &num_cpus, 1) ||
 			!xlu_cfg_get_string (config, "cpus", &buf, 0)){
-		// strcpy(
         parse_vcpu_affinity(b_info, cpus, buf, num_cpus, /* is_hard */ true);
 	}
 
@@ -2025,15 +2014,20 @@ skip_vfb:
     xlu_cfg_destroy(config);
 }
 
+/* Added by ck. [ck]
+ * In this function numa_node_index is passed to 
+ * and will replace the new VM's cpus' settings
+ */
 static void parse_config_data_numa(const char *config_source,
                               const char *config_data,
                               int config_len,
                               libxl_domain_config *d_config,
-							  int node_index)
+							  char *node_index)
 {
     const char *buf;
+	char *cap_str = NULL; // Used to pass cpu settings. [ck]
 	char numa_cpu_str[8] = "nodes:"; // for cpu setup [ck], node index betwenn 0 and 9 only
-	char node_str[1] = {'0'}; //[ck]
+	//char node_str[1] = {'0'}; //[ck]
     long l;
     XLU_Config *config;
     XLU_ConfigList *cpus, *vbds, *nics, *pcis, *cvfbs, *cpuids, *vtpms;
@@ -2142,12 +2136,13 @@ static void parse_config_data_numa(const char *config_source,
 	 * [ck]
 	 */
 	fprintf(stderr, "[ck] Begin replacing cpus...\n");
-	node_str[0] = (char)('0' + node_index);
-	strcat(numa_cpu_str, node_str);
-	buf = numa_cpu_str;
-	char **cap_str = NULL;
-	cap_str = &buf;
-	xlu_cfg_replace_string (config, "cpus", *cap_str, 0);
+	//node_str[0] = (char)('0' + node_index);
+	strcat(numa_cpu_str, node_index);
+	//buf = numa_cpu_str;	
+	cap_str = numa_cpu_str;
+	//char **cap_str = NULL;
+	//cap_str = &buf;
+	xlu_cfg_replace_string (config, "cpus", &cap_str, 0);
 	fprintf(stderr, "[ck] End replacing cpus...\n");
 	/* end
 	 * I've replaced cpu setup with new node's settings. [ck]
@@ -4790,7 +4785,7 @@ static void save_domain_core_begin(uint32_t domid,
 static void save_numa_domain_core_begin(uint32_t domid,
                                    const char *override_config_file,
                                    uint8_t **config_data_r,
-                                   int *config_len_r, int node_index)
+                                   int *config_len_r, char *numa_index)
 {
     int rc;
     libxl_domain_config d_config;
@@ -4815,18 +4810,23 @@ static void save_numa_domain_core_begin(uint32_t domid,
 		 */
 		fprintf(stderr, "[ck] Begin passing numa node index to parse_config_data_numa.\n");
 		parse_config_data_numa(override_config_file, config_v, *config_len_r,
-                          &d_config, node_index);
+                          &d_config, numa_index);
 		fprintf(stderr, "[ck] End passing numa node index to parse_config_data_numa.\n");
         free(config_v);
     } else {
-        rc = libxl_retrieve_domain_configuration(ctx, domid, &d_config);
+        //rc = libxl_retrieve_domain_configuration(ctx, domid, &d_config);
+		fprintf(stderr, "[ck] Entering libxl_retrieve_domain_config_numa().\n");
+		rc = libxl_retrieve_domain_config_numa(ctx, domid, &d_config, numa_index);
+		fprintf(stderr, "[ck] Leave libxl_retrieve_domain_config_numa().\n");
         if (rc) {
-            fprintf(stderr, "unable to retrieve domain configuration\n");
+            //fprintf(stderr, "unable to retrieve domain configuration\n");
+			fprintf(stderr, "[ck] unable to retrieve domain configuration\n");
             exit(2);
         }
     }
 
     config_c = libxl_domain_config_to_json(ctx, &d_config);
+	fprintf(stderr, "[ck] final configuration is %s\n", config_c);
     if (!config_c) {
         fprintf(stderr, "unable to convert config file to JSON\n");
         exit(2);
@@ -4940,6 +4940,7 @@ static pid_t create_migration_child(const char *rune, int *send_fd,
         dup2(recvpipe[1], 1);
         close(sendpipe[0]); close(sendpipe[1]);
         close(recvpipe[0]); close(recvpipe[1]);
+		// Sh to target host and revoke migrate-receive(). [ck]
         execlp("sh","sh","-c",rune,(char*)0);
         perror("failed to exec sh");
         exit(-1);
@@ -5213,12 +5214,12 @@ static void migrate_domain(uint32_t domid, const char *rune, int debug,
  * Q: how can VCPUs be pinned to a node before domain_resume?
  */
 static void migrate_domain_numa(uint32_t domid, const char *rune, int debug,
-                           const char *override_config_file)
+                           const char *override_config_file, char *numa_index)
 {
     pid_t child = -1;
     int rc;
     int send_fd = -1, recv_fd = -1; // file descriptors
-	int numa_index = 0; //[ck]
+	//int numa_index = 0; //[ck]
     char *away_domname;
     char rc_buf;
     uint8_t *config_data;
@@ -5231,9 +5232,10 @@ static void migrate_domain_numa(uint32_t domid, const char *rune, int debug,
 	/* get node_index [ck]
 	 * Here I suppose the input argv only contain a number rightnow.
 	 */
-	numa_index = (int)(rune[0] - '0');
-	fprintf(stderr, "[ck] Target node index is retrived from rune, the node index is %d\n", 
+	//numa_index = (int)(rune[0] - '0');
+	fprintf(stderr, "[ck] Target node index is retrived from rune, the node index is %s\n", 
 			numa_index);
+	fprintf(stderr, "[ck] The complete rune is %s\n Entering save_numa_domain_core_begin()\n", rune);
     save_numa_domain_core_begin(domid, override_config_file,
                            &config_data, &config_len, numa_index);
 	// end [ck]
@@ -5646,8 +5648,11 @@ int main_migrate(int argc, char **argv)
     const char *ssh_command = "ssh";
     char *rune = NULL;
     char *host;
+	// numa_index is an argv in cmd which indicates the target numa node. 
+	// Assumed to be only a number string. [ck]
+	char *numa_index = NULL; 
     int opt, daemonize = 1, monitor = 1, debug = 0;
-	int numa_mig = 0;// 1 if a numa migration is going to be performed.
+	int numa_mig = 0;// 1 if a numa migration is going to be performed. [ck]
     static struct option opts[] = {
         {"debug", 0, 0, 0x100},
         COMMON_LONG_OPTS,
@@ -5696,7 +5701,7 @@ int main_migrate(int argc, char **argv)
 	/* Added by ck. [ck] */
 	case 'n':
 		// This is for numa migration. [ck]
-		daemonize = 0;
+		//daemonize = 0;// daemonize is not needed.
 		numa_mig = 1;
 		break;
 	case 0x100:
@@ -5705,76 +5710,60 @@ int main_migrate(int argc, char **argv)
     }
 	// common migration [ck]
 	bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
+	domid = find_domain(argv[optind]);
 	
-	if(!numa_mig) {
-		domid = find_domain(argv[optind]);
+	fprintf(stderr, "[ck] numa_mig == %d in main_migrate()\n", numa_mig);
+	
+	if(numa_mig == 1) {		
+		numa_index = argv[optind + 1]; // This should be an interger. [ck]
+		host = "localhost"; // When migrating to a numa node then it should be on local host. [ck]
+		fprintf(stderr, "[ck] numa_index == %s, host == %s in main_migrate()\n", numa_index, host);
+	}
+	else { // normal migration 
 		host = argv[optind + 1];
+		fprintf(stderr, "[ck] host == %s in main_migrate()\n", host);
+	}
 
-		//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
+	//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
 
-		if (!ssh_command[0]) {
-			rune= host;
+	if (!ssh_command[0]) {
+		fprintf(stderr, "[ck] main_migrate(), in the if (!ssh_command[0])");
+		rune= host;
+	} else {
+		fprintf(stderr, "[ck] main_migrate(), in the else (!ssh_command[0])");
+		char verbose_buf[minmsglevel_default+3];
+		int verbose_len;
+		verbose_buf[0] = ' ';
+		verbose_buf[1] = '-';
+		memset(verbose_buf+2, 'v', minmsglevel_default);
+		verbose_buf[sizeof(verbose_buf)-1] = 0;
+		if (minmsglevel == minmsglevel_default) {
+			verbose_len = 0;
 		} else {
-			char verbose_buf[minmsglevel_default+3];
-			int verbose_len;
-			verbose_buf[0] = ' ';
-			verbose_buf[1] = '-';
-			memset(verbose_buf+2, 'v', minmsglevel_default);
-			verbose_buf[sizeof(verbose_buf)-1] = 0;
-			if (minmsglevel == minmsglevel_default) {
-				verbose_len = 0;
-			} else {
-				verbose_len = (minmsglevel_default - minmsglevel) + 2;
-			}
-			if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
-						 ssh_command, host,
-						 pass_tty_arg ? " -t" : "",
-						 verbose_len, verbose_buf,
-						 daemonize ? "" : " -e",
-						 debug ? " -d" : "") < 0)
-				return 1;
+			verbose_len = (minmsglevel_default - minmsglevel) + 2;
 		}
-		
-		/*migrate_domain has to be changed to support on-host numa migration. [ck]*/
-		migrate_domain(domid, rune, debug, config_filename);
-		//return 0;
+		if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
+					 ssh_command, host,
+					 pass_tty_arg ? " -t" : "",
+					 verbose_len, verbose_buf,
+					 daemonize ? "" : " -e",
+					 debug ? " -d" : "") < 0){
+			fprintf(stderr, "[ck] asprintf rune is %s", rune);
+			return 1;
+		}
+		fprintf(stderr, "[ck] main_migrate(), leave the else (!ssh_command[0])");
 	}
-	// numa migration. Added by ck.[ck]
+	
+	/*migrate_domain has to be changed to support on-host numa migration. [ck]*/
+	if(numa_mig == 1){
+		fprintf(stderr, "[ck] entering migrate_domain_numa()...\n");
+		migrate_domain_numa(domid, rune, debug, config_filename, numa_index);
+		fprintf(stderr, "[ck] leave migrate_domain_numa()\n");
+	}
 	else {
-		// Here host is node_id of numa nodes.
-		domid = find_domain(argv[optind]);
-		host = argv[optind + 1]; // This should be a number between 0 and 9
-		
-		//bool pass_tty_arg = progress_use_cr || (isatty(2) > 0);
-		
-		rune = host;
-		/* Currently I donnot think ssh cmd is necessary but simply pass #rune# will cause error
-		 * which has to be corrected somehow. [ck]
-		 */
-		//char verbose_buf[minmsglevel_default+3];
-        //int verbose_len;
-        //verbose_buf[0] = ' ';
-        //verbose_buf[1] = '-';
-        //memset(verbose_buf+2, 'v', minmsglevel_default);
-        //verbose_buf[sizeof(verbose_buf)-1] = 0;
-		
-        //if (minmsglevel == minmsglevel_default) {
-        //    verbose_len = 0;
-        //} else {
-        //    verbose_len = (minmsglevel_default - minmsglevel) + 2;
-        //}
-		
-        //if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
-        //             ssh_command, host,
-        //             pass_tty_arg ? " -t" : "",
-        //             verbose_len, verbose_buf,
-        //             daemonize ? "" : " -e",
-        //             debug ? " -d" : "") < 0)
-        //    return 1;
-		
-		migrate_domain_numa(domid, rune, debug, config_filename);
-		//return 0;
+		migrate_domain(domid, rune, debug, config_filename);
 	}
+	//return 0;
 	
 	return 0;
 }

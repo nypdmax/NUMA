@@ -6651,7 +6651,7 @@ int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
         libxl_uuid_copy(ctx, &d_config->c_info.uuid, &info.uuid);
         libxl_dominfo_dispose(&info);
     }
-
+	
     /* Memory limits:
      *
      * Currently there are three memory limits:
@@ -6791,6 +6791,354 @@ out:
     return rc;
 }
 
+/* debug only [ck] */
+static void print_bitmap_debug(uint8_t *map, int maplen, FILE *stream)
+{
+    int i;
+    uint8_t pmap = 0, bitmask = 0;
+    int firstset = 0, state = 0;
+
+    for (i = 0; i < maplen; i++) {
+        if (i % 8 == 0) {
+            pmap = *map++;
+            bitmask = 1;
+        } else bitmask <<= 1;
+
+        switch (state) {
+			case 0:
+			case 2:
+				if ((pmap & bitmask) != 0) {
+					firstset = i;
+					state++;
+				}
+				continue;
+			case 1:
+			case 3:
+				if ((pmap & bitmask) == 0) {
+					fprintf(stream, "%s%d", state > 1 ? "," : "", firstset);
+					if (i - 1 > firstset)
+						fprintf(stream, "-%d", i - 1);
+					state = 2;
+				}
+				continue;
+        }
+    }
+    switch (state) {
+        case 0:
+            fprintf(stream, "none");
+            break;
+        case 2:
+            break;
+        case 1:
+            if (firstset == 0) {
+                fprintf(stream, "all");
+                break;
+            }
+        case 3:
+            fprintf(stream, "%s%d", state > 1 ? "," : "", firstset);
+            if (i - 1 > firstset)
+                fprintf(stream, "-%d", i - 1);
+            break;
+    }
+	
+	fprintf(stream, "\n");
+}
+
+static void *xmalloc(size_t sz) {
+    void *r;
+    r = malloc(sz);
+		if (!r) { fprintf(stderr,"xl: Unable to malloc %lu bytes.\n",
+	(unsigned long)sz); exit(-ERROR_FAIL); }
+    return r;
+}
+
+/* Retrieve domains' configurations. [ck]
+ * And change their numa configs for numa migrations 
+ */
+int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
+                                        libxl_domain_config *d_config, char *numa_index)
+{
+    GC_INIT(ctx);
+    int rc;
+    libxl__domain_userdata_lock *lock = NULL;
+
+    CTX_LOCK;
+
+	/* Data structures used in vcpu_hard_affinity settings.
+	 * Must be freed at exit.
+	 * [ck]
+	 */
+	libxl_cputopology *tinfo = NULL;
+	libxl_numainfo *ninfo = NULL;
+	libxl_bitmap cpu_map;
+	int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
+	int *vcpus_on_node;
+		
+    lock = libxl__lock_domain_userdata(gc, domid);
+    if (!lock) {
+        rc = ERROR_LOCK_FAIL;
+        goto out;
+    }
+
+    rc = libxl__get_domain_configuration(gc, domid, d_config);
+    if (rc) {
+        LOG(ERROR, "fail to get domain configuration for domain %d", domid);
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+    /* Domain name */
+    {
+        char *domname;
+        domname = libxl_domid_to_name(ctx, domid);
+        if (!domname) {
+            LOG(ERROR, "fail to get domain name for domain %d", domid);
+            goto out;
+        }
+        free(d_config->c_info.name);
+        d_config->c_info.name = domname; /* steals allocation */
+    }
+
+    /* Domain UUID */
+    {
+        libxl_dominfo info;
+        libxl_dominfo_init(&info);
+        rc = libxl_domain_info(ctx, &info, domid);
+        if (rc) {
+            LOG(ERROR, "fail to get domain info for domain %d", domid);
+            libxl_dominfo_dispose(&info);
+            goto out;
+        }
+        libxl_uuid_copy(ctx, &d_config->c_info.uuid, &info.uuid);
+        libxl_dominfo_dispose(&info);
+    }
+	
+	/* VCPU affanities [ck] */
+
+	/* In order to perform a NUMA migration, the target VM's cpu setup has to be adjusted.
+	 * Currently the adjustment process includes:
+	 * 1. locate cpu bitmap according to the target NUMA node
+	 * 2. change VM's d_config.b_info.vcpu_hard_affinity
+	 */
+	
+	// initialize data structure
+	libxl_bitmap_init(&cpu_map);
+	
+	/* Retrive platform's CPU topology, in a format of "core socket node".
+	 * "tinfo" is an array which can be, e.g., processed by using an iteration. 
+	 */
+	tinfo = libxl_get_cpu_topology(CTX, &nr_cpus);		
+	if (tinfo == NULL){
+		rc = ERROR_FAIL;
+		LOG(WARN, "[ck] Retrieving CPU topology failed.\n");
+		fprintf(stderr, "[ck] Retrieving CPU topology failed.\n");
+		goto out;
+	}
+	
+	/* Get platform info and prepare the map for testing the combinations */
+	ninfo = libxl_get_numainfo(CTX, &nr_nodes);
+	if(ninfo == NULL){
+		rc = ERROR_FAIL;
+		LOG(WARN, "[ck] Retrieving NUMA info failed.\n");
+		fprintf(stderr, "[ck] Retrieving NUMA info failed.\n");
+		goto out;
+	}
+
+	GCNEW_ARRAY(vcpus_on_node, nr_nodes);
+
+	/* get target_node from numa_index and assert its value */
+	target_node = atoi(numa_index);
+	if(target_node < 0 || target_node > nr_nodes){
+		fprintf(stderr, "[ck] target_node is either too small(< 1) or to big (> %d)\n, \
+				force it to 0, or there was a possible conversion error.\n", nr_nodes);
+		target_node = 0;
+	}
+	
+	/* Alloc cpu_map and prepare mapping between node and cpu topology */
+	rc = libxl_node_bitmap_alloc(CTX, &cpu_map, 0);
+    if (rc)
+        goto out;
+	
+	rc = libxl_node_to_cpumap(ctx, target_node, &cpu_map);
+	if (rc) {
+		fprintf(stderr, "[ck] libxl_node_to_cpumap failed.\n");
+		goto out;
+	}
+	
+	/* debug [ck]*/
+	fprintf(stderr, "[ck] Print cpu map with nr_cpus == %d. Map is: ", nr_cpus);
+	print_bitmap_debug(cpu_map.map, nr_cpus, stderr);
+
+	
+	/* Initialize vcpu affinity */
+	d_config->b_info.num_vcpu_hard_affinity = d_config->b_info.max_vcpus;
+	fprintf(stderr, "[ck] Initalize vcpu hard affinity and set its value.\n");
+	d_config->b_info.vcpu_hard_affinity = xmalloc(d_config->b_info.max_vcpus * sizeof(libxl_bitmap));
+	libxl_bitmap_init(d_config->b_info.vcpu_hard_affinity);
+	
+	/* Set each VCPU's hard affinity */
+ 	for (int i = 0; i < d_config->b_info.max_vcpus; i++){
+		libxl_bitmap_copy_alloc(ctx, &d_config->b_info.vcpu_hard_affinity[i], &cpu_map);
+	}
+	
+	/* Disable numa placement. [ck] */
+	libxl_defbool_set(&d_config->b_info.numa_placement, false);
+	fprintf(stderr, "[ck] VCPU hard affinity setup complete.\n");
+	
+	//fprintf(stderr, "[ck] d_config->b_info.num_vcpu_hard_affinity == %d.\n", d_config->b_info.num_vcpu_hard_affinity);
+	//if ((libxl_bitmap_is_empty(d_config->b_info.vcpu_hard_affinity) == 0) && !d_config->b_info.vcpu_hard_affinity->map){
+	//	fprintf(stderr, "[ck] d_config->b_info.vcpu_hard_affinity ");
+	//	print_bitmap_debug(d_config->b_info.vcpu_hard_affinity->map, nr_cpus, stderr);
+	//}
+	/* End set up affinity. */
+
+    /* Memory limits:
+     *
+     * Currently there are three memory limits:
+     *  1. "target" in xenstore (originally memory= in config file)
+     *  2. "static-max" in xenstore (originally maxmem= in config file)
+     *  3. "max_memkb" in hypervisor
+     *
+     * The third one is not visible and currently managed by
+     * toolstack. In order to rebuild a domain we only need to have
+     * "target" and "static-max".
+     */
+    {
+        uint32_t target_memkb = 0, max_memkb = 0;
+
+        /* "target" */
+        rc = libxl__get_memory_target(gc, domid, &target_memkb, &max_memkb);
+        if (rc) {
+            LOG(ERROR, "fail to get memory target for domain %d", domid);
+            goto out;
+        }
+        /* Target memory in xenstore is different from what user has
+         * asked for. The difference is video_memkb. See
+         * libxl_set_memory_target.
+         */
+        d_config->b_info.target_memkb = target_memkb +
+            d_config->b_info.video_memkb;
+
+        d_config->b_info.max_memkb = max_memkb;
+    }
+
+    /* Devices: disk, nic, vtpm, pcidev etc. */
+
+    /* The MERGE macro implements following logic:
+     * 0. retrieve JSON (done by now)
+     * 1. retrieve list of device from xenstore
+     * 2. use xenstore entries as primary reference and compare JSON
+     *    entries with them.
+     *    a. if a device is present in xenstore and in JSON, merge the
+     *       two views.
+     *    b. if a device is not present in xenstore but in JSON, delete
+     *       it from the result.
+     *    c. it's impossible to have an entry present in xenstore but
+     *       not in JSON, because we maintain an invariant that every
+     *       entry in xenstore must have a corresponding entry in JSON.
+     * 3. "merge" operates on "src" and "dst". "src" points to the
+     *    entry retrieved from xenstore while "dst" points to the entry
+     *    retrieve from JSON.
+     */
+#define MERGE(type, ptr, compare, merge)                                \
+    do {                                                                \
+        libxl_device_##type *p = NULL;                                  \
+        int i, j, num;                                                  \
+                                                                        \
+        p = libxl_device_##type##_list(CTX, domid, &num);               \
+        if (p == NULL) {                                                \
+            LOG(DEBUG,                                                  \
+                "no %s from xenstore for domain %d",                    \
+                #type, domid);                                          \
+        }                                                               \
+                                                                        \
+        for (i = 0; i < d_config->num_##ptr; i++) {                     \
+            libxl_device_##type *q = &d_config->ptr[i];                 \
+            for (j = 0; j < num; j++) {                                 \
+                if (compare(&p[j], q))                                  \
+                    break;                                              \
+            }                                                           \
+                                                                        \
+            if (j < num) {         /* found in xenstore */              \
+                libxl_device_##type *dst, *src;                         \
+                dst = q;                                                \
+                src = &p[j];                                            \
+                merge;                                                  \
+            } else {                /* not found in xenstore */         \
+                LOG(WARN,                                               \
+                "Device present in JSON but not in xenstore, ignored"); \
+                                                                        \
+                libxl_device_##type##_dispose(q);                       \
+                                                                        \
+                for (j = i; j < d_config->num_##ptr - 1; j++)           \
+                    memcpy(&d_config->ptr[j], &d_config->ptr[j+1],      \
+                           sizeof(libxl_device_##type));                \
+                                                                        \
+                d_config->ptr =                                         \
+                    libxl__realloc(NOGC, d_config->ptr,                 \
+                                   sizeof(libxl_device_##type) *        \
+                                   (d_config->num_##ptr - 1));          \
+                                                                        \
+                /* rewind counters */                                   \
+                d_config->num_##ptr--;                                  \
+                i--;                                                    \
+            }                                                           \
+        }                                                               \
+                                                                        \
+        for (i = 0; i < num; i++)                                       \
+            libxl_device_##type##_dispose(&p[i]);                       \
+        free(p);                                                        \
+    } while (0);
+
+    MERGE(nic, nics, COMPARE_DEVID, {});
+
+    MERGE(vtpm, vtpms, COMPARE_DEVID, {});
+
+    MERGE(pci, pcidevs, COMPARE_PCI, {});
+
+    /* Take care of removable device. We maintain invariant in the
+     * insert / remove operation so that:
+     * 1. if xenstore is "empty" while JSON is not, the result
+     *    is "empty"
+     * 2. if xenstore has a different media than JSON, use the
+     *    one in JSON
+     * 3. if xenstore and JSON have the same media, well, you
+     *    know the answer :-)
+     *
+     * Currently there is only one removable device -- CDROM.
+     * Look for libxl_cdrom_insert for reference.
+     */
+    MERGE(disk, disks, COMPARE_DISK, {
+            if (src->removable) {
+                if (!src->pdev_path || *src->pdev_path == '\0') {
+                    /* 1, no media in drive */
+                    free(dst->pdev_path);
+                    dst->pdev_path = libxl__strdup(NOGC, "");
+                    dst->format = LIBXL_DISK_FORMAT_EMPTY;
+                } else {
+                    /* 2 and 3, use JSON, no need to touch anything */
+                    ;
+                }
+            }
+        });
+
+#undef MERGE
+
+out:
+    if (lock) libxl__unlock_domain_userdata(lock);
+	/* Free data structures. 
+	 * Added by ck. [ck]
+	 * Start:
+	 */
+	libxl_cputopology_list_free(tinfo, nr_cpus);
+	libxl_numainfo_list_free(ninfo, nr_nodes);
+    libxl_bitmap_dispose(&cpu_map);
+	//libxl_bitmap_dispose(&node_map);
+	/* End */
+	CTX_UNLOCK;
+    GC_FREE;
+    return rc;
+}
 /*
  * Local variables:
  * mode: C

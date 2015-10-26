@@ -945,6 +945,14 @@ void libxl_domain_config_dispose(libxl_domain_config *d_config);
 int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
                                         libxl_domain_config *d_config);
 
+/* [ck]
+ * Retrieve domain configuration, change its cpu affanity according to numa_index
+ * and filled it in d_config. The returned configuration can be used to rebuild 
+ * a domain. It onlyworks with DomU.
+ */
+int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
+                                        libxl_domain_config *d_config, char *numa_index);
+
 int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd,
                          int flags, /* LIBXL_SUSPEND_* */
                          const libxl_asyncop_how *ao_how)
