@@ -6864,134 +6864,15 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 
     CTX_LOCK;
 
-	/* VM's vcpu_hard_affinity is not stored in XenStore currently so 
-	* we have to manually change d_config
-	* [ck]
-	*/
+	/* Data structures used in vcpu_hard_affinity settings.
+	 * Must be freed at exit.
+	 * [ck]
+	 */
 	libxl_cputopology *tinfo = NULL;
 	libxl_numainfo *ninfo = NULL;
-	libxl_bitmap cpu_map;//, node_map;
+	libxl_bitmap cpu_map;
 	int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
-	//int i = 0, suitable_cpus = 0;
 	int *vcpus_on_node;
-
-	///* VCPU affanities:
-	// * [ck]
-	// * In order to perform a NUMA migration, the target VM's cpu setup has to be adjusted.
-	// * Currently the adjustment process includes:
-	// * 1. locate cpu bitmap according to the target NUMA node
-	// * 2. change VM's d_config.b_info.vcpu_hard_affinity
-
-	// * NOTE: libxl_set_vcpuaffinity in 537x 
-	// * and libxl__get_numa_candidate in libxl_numa.c could provide some hints
-	// * libxl_set_vcpuaffinity and libxl_set_vcpuaffinity_all
-	// */
-	///* VM's vcpu_hard_affinity is not stored in XenStore currently so 
-	//* we have to manually change d_config
-	//* [ck]
-	//*/
-	////libxl_cputopology *tinfo = NULL;
-	////libxl_numainfo *ninfo = NULL;
-	////libxl_bitmap cpu_map;//, node_map;
-	////int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
-	//////int i = 0, suitable_cpus = 0;
-	////int *vcpus_on_node;
-	
-	//// initialize data structure
-	//libxl_bitmap_init(&cpu_map);
-	////libxl_bitmap_init(&node_map);
-	
-	///* "tinfo" is an array which can be, e.g., processed by using an iteration. */
-	////libxl_cputopology_init(tinfo);
-	//tinfo = libxl_get_cpu_topology(CTX, &nr_cpus);		
-	//if (tinfo == NULL){
-	//	rc = ERROR_FAIL;
-	//	LOG(WARN, "[ck] Retrieving CPU topology failed.\n");
-	//	fprintf(stderr, "[ck] Retrieving CPU topology failed.\n");
-	//	goto out;
-	//}
-	
-	///* Get platform info and prepare the map for testing the combinations */
-	////libxl_numainfo_init(ninfo);
-	//ninfo = libxl_get_numainfo(CTX, &nr_nodes);
-	//if(ninfo == NULL){
-	//	rc = ERROR_FAIL;
-	//	LOG(WARN, "[ck] Retrieving NUMA info failed.\n");
-	//	fprintf(stderr, "[ck] Retrieving NUMA info failed.\n");
-	//	goto out;
-	//}
-
-	//GCNEW_ARRAY(vcpus_on_node, nr_nodes);
-	
-	////for (i = 0 ; i < nr_cpus; i++){
-	////	/* Here I'm going to manually construct the vcpu_hard_affinity string,
-	////   * like {0,1,2,3,4,5}
-	////	 * currently I have no better options.
-	////   */
-	////	if(tinfo[i].node == target_node){
-	////		suitable_cpus++;-
-	////		if(suitable_cpus > 1){
-	////			strcat(buf, ',');
-	////		}
-	////		strcat(buf, (char)(i+'0'));
-	////}
-	///* get target_node from numa_index and assert its value */
-	//target_node = atoi(numa_index);
-	//if(target_node < 0 || target_node > nr_nodes){
-	//	fprintf(stderr, "[ck] target_node is either too small(< 1) or to big (> %d)\n, force it to 0, or there was a possible conversion error.\n", nr_nodes);
-	//	target_node = 0;
-	//}
-	
-	///* Alloc cpu_map and prepare mapping between node and cpu topology */
-	//rc = libxl_node_bitmap_alloc(CTX, &cpu_map, 0);
-    //if (rc)
-    //    goto out;
-	
-	//rc = libxl_node_to_cpumap(ctx, target_node, &cpu_map);
-	//if (rc) {
-	//	fprintf(stderr, "[ck] libxl_node_to_cpumap failed.\n");
-	//	goto out;
-	//}
-	
-	///* debug [ck]*/
-	//fprintf(stderr, "[ck] Print cpu map with max_vcpus.\n");
-	////print_bitmap_debug(cpu_map.map, d_config->b_info.max_vcpus, stderr);
-	//print_bitmap_debug(cpu_map.map, 16, stderr);
-	//fprintf(stderr, "[ck] Print cpu map with nr_cpus == %d.\n", nr_cpus);
-	//print_bitmap_debug(cpu_map.map, nr_cpus, stderr);
-
-	
-	///* set up cpu affinity */
-	//if (libxl_set_vcpuaffinity_all(ctx, domid, d_config->b_info.max_vcpus, &cpu_map, NULL)){
-	//	fprintf(stderr, "[ck] Could not set affinity.\n");
-	//	goto out;
-	//}
-	///* End set up affinity. */
-
-	/* debug [ck]*/
-	//fprintf(stderr, "[ck] Print d_config main members.\n");
-	//fprintf(stderr, "[ck] d_config->b_info.max_vcpus == %d.\n", d_config->b_info.max_vcpus);
-	
-	//if ((libxl_bitmap_is_empty(&d_config->b_info.cpumap) == 0) && !d_config->b_info.cpumap.map){
-	//	fprintf(stderr, "[ck] d_config->b_info.cpumap ");
-	//	print_bitmap_debug(d_config->b_info.cpumap.map, nr_cpus, stderr);
-	//}
-	//if ((libxl_bitmap_is_empty(&d_config->b_info.nodemap) == 0) && !d_config->b_info.nodemap.map){
-	//	fprintf(stderr, "[ck] d_config->b_info.nodemap ");
-	//	print_bitmap_debug(d_config->b_info.nodemap.map, nr_nodes, stderr);
-	//}
-	//fprintf(stderr, "[ck] d_config->b_info.num_vcpu_hard_affinity == %d.\n", d_config->b_info.num_vcpu_hard_affinity);
-	//if ((libxl_bitmap_is_empty(d_config->b_info.vcpu_hard_affinity) == 0) && !d_config->b_info.vcpu_hard_affinity->map){
-	//	fprintf(stderr, "[ck] d_config->b_info.vcpu_hard_affinity ");
-	//	print_bitmap_debug(d_config->b_info.vcpu_hard_affinity->map, nr_cpus, stderr);
-	//}
-	//fprintf(stderr, "[ck] d_config->b_info.num_vcpu_soft_affinity == %d.\n", d_config->b_info.num_vcpu_soft_affinity);
-	//if ((libxl_bitmap_is_empty(d_config->b_info.vcpu_soft_affinity) == 0) && !d_config->b_info.vcpu_soft_affinity->map){
-	//	fprintf(stderr, "[ck] d_config->b_info.vcpu_soft_affinity ");
-	//	print_bitmap_debug(d_config->b_info.vcpu_soft_affinity->map, nr_cpus, stderr);
-	//}
-
-	//fprintf(stderr, "[ck] Print d_config main members END.\n");
 		
     lock = libxl__lock_domain_userdata(gc, domid);
     if (!lock) {
@@ -7032,34 +6913,20 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
         libxl_dominfo_dispose(&info);
     }
 	
-	/* VCPU affanities:
-	 * [ck]
-	 * In order to perform a NUMA migration, the target VM's cpu setup has to be adjusted.
+	/* VCPU affanities [ck] */
+
+	/* In order to perform a NUMA migration, the target VM's cpu setup has to be adjusted.
 	 * Currently the adjustment process includes:
 	 * 1. locate cpu bitmap according to the target NUMA node
 	 * 2. change VM's d_config.b_info.vcpu_hard_affinity
-
-	 * NOTE: libxl_set_vcpuaffinity in 537x 
-	 * and libxl__get_numa_candidate in libxl_numa.c could provide some hints
-	 * libxl_set_vcpuaffinity and libxl_set_vcpuaffinity_all
 	 */
-	/* VM's vcpu_hard_affinity is not stored in XenStore currently so 
-	* we have to manually change d_config
-	* [ck]
-	*/
-	//libxl_cputopology *tinfo = NULL;
-	//libxl_numainfo *ninfo = NULL;
-	//libxl_bitmap cpu_map;//, node_map;
-	//int nr_cpus = 0, nr_nodes = 0,target_node = 0;	
-	////int i = 0, suitable_cpus = 0;
-	//int *vcpus_on_node;
 	
 	// initialize data structure
 	libxl_bitmap_init(&cpu_map);
-	//libxl_bitmap_init(&node_map);
 	
-	/* "tinfo" is an array which can be, e.g., processed by using an iteration. */
-	//libxl_cputopology_init(tinfo);
+	/* Retrive platform's CPU topology, in a format of "core socket node".
+	 * "tinfo" is an array which can be, e.g., processed by using an iteration. 
+	 */
 	tinfo = libxl_get_cpu_topology(CTX, &nr_cpus);		
 	if (tinfo == NULL){
 		rc = ERROR_FAIL;
@@ -7069,7 +6936,6 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 	}
 	
 	/* Get platform info and prepare the map for testing the combinations */
-	//libxl_numainfo_init(ninfo);
 	ninfo = libxl_get_numainfo(CTX, &nr_nodes);
 	if(ninfo == NULL){
 		rc = ERROR_FAIL;
@@ -7079,19 +6945,7 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 	}
 
 	GCNEW_ARRAY(vcpus_on_node, nr_nodes);
-	
-	//for (i = 0 ; i < nr_cpus; i++){
-	//	/* Here I'm going to manually construct the vcpu_hard_affinity string,
-	//   * like {0,1,2,3,4,5}
-	//	 * currently I have no better options.
-	//   */
-	//	if(tinfo[i].node == target_node){
-	//		suitable_cpus++;-
-	//		if(suitable_cpus > 1){
-	//			strcat(buf, ',');
-	//		}
-	//		strcat(buf, (char)(i+'0'));
-	//}
+
 	/* get target_node from numa_index and assert its value */
 	target_node = atoi(numa_index);
 	if(target_node < 0 || target_node > nr_nodes){
@@ -7112,35 +6966,30 @@ int libxl_retrieve_domain_config_numa(libxl_ctx *ctx, uint32_t domid,
 	}
 	
 	/* debug [ck]*/
-	fprintf(stderr, "[ck] Print cpu map with max_vcpus.\n");
-	//print_bitmap_debug(cpu_map.map, d_config->b_info.max_vcpus, stderr);
-	print_bitmap_debug(cpu_map.map, 16, stderr);
-	fprintf(stderr, "[ck] Print cpu map with nr_cpus == %d.\n", nr_cpus);
+	fprintf(stderr, "[ck] Print cpu map with nr_cpus == %d. Map is: ", nr_cpus);
 	print_bitmap_debug(cpu_map.map, nr_cpus, stderr);
 
 	
-	/* set up cpu affinity */
-	//if (libxl_set_vcpuaffinity_all(ctx, domid, d_config->b_info.max_vcpus, &cpu_map, NULL)){
-	//	fprintf(stderr, "[ck] Could not set affinity.\n");
-	//	goto out;
-	//}
+	/* Initialize vcpu affinity */
 	d_config->b_info.num_vcpu_hard_affinity = d_config->b_info.max_vcpus;
 	fprintf(stderr, "[ck] Initalize vcpu hard affinity and set its value.\n");
 	d_config->b_info.vcpu_hard_affinity = xmalloc(d_config->b_info.max_vcpus * sizeof(libxl_bitmap));
 	libxl_bitmap_init(d_config->b_info.vcpu_hard_affinity);
-	for (int i = 0; i < d_config->b_info.max_vcpus; i++){
+	
+	/* Set each VCPU's hard affinity */
+ 	for (int i = 0; i < d_config->b_info.max_vcpus; i++){
 		libxl_bitmap_copy_alloc(ctx, &d_config->b_info.vcpu_hard_affinity[i], &cpu_map);
 	}
+	
 	/* Disable numa placement. [ck] */
 	libxl_defbool_set(&d_config->b_info.numa_placement, false);
 	fprintf(stderr, "[ck] VCPU hard affinity setup complete.\n");
 	
-	fprintf(stderr, "[ck] d_config->b_info.num_vcpu_hard_affinity == %d.\n", d_config->b_info.num_vcpu_hard_affinity);
-	if ((libxl_bitmap_is_empty(d_config->b_info.vcpu_hard_affinity) == 0) && !d_config->b_info.vcpu_hard_affinity->map){
-		fprintf(stderr, "[ck] d_config->b_info.vcpu_hard_affinity ");
-		print_bitmap_debug(d_config->b_info.vcpu_hard_affinity->map, nr_cpus, stderr);
-	}
-	//*(d_config->b_info.vcpu_hard_affinity) = cpu_map;
+	//fprintf(stderr, "[ck] d_config->b_info.num_vcpu_hard_affinity == %d.\n", d_config->b_info.num_vcpu_hard_affinity);
+	//if ((libxl_bitmap_is_empty(d_config->b_info.vcpu_hard_affinity) == 0) && !d_config->b_info.vcpu_hard_affinity->map){
+	//	fprintf(stderr, "[ck] d_config->b_info.vcpu_hard_affinity ");
+	//	print_bitmap_debug(d_config->b_info.vcpu_hard_affinity->map, nr_cpus, stderr);
+	//}
 	/* End set up affinity. */
 
     /* Memory limits:
